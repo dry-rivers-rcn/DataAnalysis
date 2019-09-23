@@ -120,8 +120,8 @@ plot_fun<-function(gage){
   plot(ts$q_bf, ts$dq*-1, log="xy", type="n",
        xlim = c(2e-8, 5e-1),
        ylim = c(1e-10, 1),
-       xlab = "Baseflow [cm]", 
-       ylab = "dq/dt [cm/day]",
+       xlab = "Baseflow [cm/day]", 
+       ylab = "dq/dt [cm/day^2]",
        main = paste("USGS Gage ",gage),
        cex.lab = 14/12, 
        cex.axis = 10/12)
