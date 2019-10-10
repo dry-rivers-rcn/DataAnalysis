@@ -69,3 +69,6 @@ fun<-function(n){
 
 #Apply function -- smoke em [i.e. multiple cores] if you got em!
 output<-mclapply(seq(1,nrow(sheds)), fun, mc.cores = detectCores()) %>% bind_rows(.)
+
+#Save Image
+save.image(paste0(data_dir,"backup_bedrock.RData"))
