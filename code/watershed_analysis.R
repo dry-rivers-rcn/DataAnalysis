@@ -5,10 +5,6 @@
 #Purpose: Estimate aggregate watershed attributes for Gage Analysis
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-#Next steps, download depth to bedrock layer
-#Estimate accross CONUS
-
-
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #1.0 Setup Workspace------------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -18,7 +14,8 @@ rm(list=ls())
 #download relevant packages
 library(raster)
 library(sf)
-library(velox)
+library(fasterize)
+library(parallel)
 library(tidyverse)
 
 #Define data directories
@@ -34,35 +31,41 @@ bedrock_depth<-raster::raster(paste0(data_dir,'BDTICM_M_250m_ll.tif'))
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #2.0 Extract data---------------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Create function to extract data from 10 watersheds at a time
-#fun<-function(n){
+#Create function to extract values from large raster function
+extracterize<-function(r, p, uid, fun=function(x){mean(x, na.rm=T)}){
+
+  #reproject polygon 
+  p<-st_transform(p, crs=r@crs)
   
-  #for testing 
-  n<-1
-
-  #Subshed sheds
-  sheds_subset<-sheds[n,]
+  #convert ws_poly to to a grid of points
+  p_grd<-fasterize::fasterize(p, crop(r, p))
+  p_pnt<-rasterToPoints(p_grd) %>% 
+    as_tibble() %>% 
+    st_as_sf(., coords = c("x", "y"), crs = r@crs) %>% 
+    as_Spatial(.)
   
-  #Convert to bedrock depth projection
-  sheds_subset<-sf::st_transform(sheds_subset, crs=bedrock_depth@crs)
-
-  #Crop bedrock raster
-  b<-raster::crop(bedrock_depth, sheds)
-
-  #Turn bedrock depth into velox object
-  bedrock_depth_v<-velox::velox(bedrock_depth)
-
-  #Convert sheds to sp (for velox extraction)
-  sheds_sp<-sf::as_Spatial(sf::st_geometry(sheds),
-                           IDs = as.character(sheds[["GAGE_ID"]]))
-
-
-  #Velox extraction
-  output<-bedrock_depth_v$extract(sheds_sp, fun = function(x){mean(x, na.rm=T)},  df = TRUE)
+  #Extract values at points
+  p_values <- raster::extract(r, p_pnt)
   
-  #Export results
+  #Apply function
+  result<- fun(p_values)
+  
+  #Create output
+  output<-tibble(
+    uid,
+    value = result
+  )
+  
+  #Export Output
   output
 }
 
-#Apply function
-sims<-seq(1, ceiling(nrow(sheds)/10))
+#Create wrapper for extraction function
+fun<-function(n){
+  extracterize(r = bedrock_depth, 
+               p = sheds[n,],
+               uid = sheds$gage_num[n])
+}
+
+#Apply function -- smoke em [i.e. multiple cores] if you got em!
+output<-mclapply(seq(1,nrow(sheds)), fun, mc.cores = detectCores()) %>% bind_rows(.)
