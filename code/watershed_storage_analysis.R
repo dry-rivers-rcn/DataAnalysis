@@ -1,8 +1,8 @@
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#Title: Watershed Analyis
+#Title: Watershed Storage 
 #Coder: Nate Jones (cnjones7@ua.edu)
 #Date: 10/8/2019
-#Purpose: Estimate aggregate watershed attributes for Gage Analysis
+#Purpose: Estimate aggregate watershed storage for USGS gagesII dataset
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -24,9 +24,9 @@ data_dir<-"/nfs/njones-data/Research Projects/DryRiversRCN/spatial_data/"
 #This directory contains:
 # (1) Watershed Shapefiles Obtained from John Hammond (during the DryRiversRCN)
 # (2) Depth to bedrock: https://doi.org/10.1371/journal.pone.0169748
-#web address: https://data.isric.org/geonetwork/srv/eng/catalog.search#/metadata/f36117ea-9be5-4afd-bb7d-7a3e77bf392a
+      #web address: https://data.isric.org/geonetwork/srv/eng/catalog.search#/metadata/f36117ea-9be5-4afd-bb7d-7a3e77bf392a
 # (3) porosity:  https://doi.org/10.1002/2014GL059856
-#web address: https://dataverse.scholarsportal.info/dataset.xhtml?persistentId=doi:10.5683/SP2/DLGXYO
+      #web address: https://dataverse.scholarsportal.info/dataset.xhtml?persistentId=doi:10.5683/SP2/DLGXYO
 
 
 #Bring spatial data into R environmnet
