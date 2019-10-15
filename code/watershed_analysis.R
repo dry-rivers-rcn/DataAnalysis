@@ -21,12 +21,12 @@ library(tidyverse)
 
 #Define data directories
 data_dir<-"/nfs/njones-data/Research Projects/DryRiversRCN/spatial_data/"
-  #This directory contains:
-  # (1) Watershed Shapefiles Obtained from John Hammond (during the DryRiversRCN)
-  # (2) Depth to bedrock: https://doi.org/10.1371/journal.pone.0169748
-          #web address: https://data.isric.org/geonetwork/srv/eng/catalog.search#/metadata/f36117ea-9be5-4afd-bb7d-7a3e77bf392a
-  # (3) porosity:  https://doi.org/10.1002/2014GL059856
-          #web address: https://dataverse.scholarsportal.info/dataset.xhtml?persistentId=doi:10.5683/SP2/DLGXYO
+#This directory contains:
+# (1) Watershed Shapefiles Obtained from John Hammond (during the DryRiversRCN)
+# (2) Depth to bedrock: https://doi.org/10.1371/journal.pone.0169748
+#web address: https://data.isric.org/geonetwork/srv/eng/catalog.search#/metadata/f36117ea-9be5-4afd-bb7d-7a3e77bf392a
+# (3) porosity:  https://doi.org/10.1002/2014GL059856
+#web address: https://dataverse.scholarsportal.info/dataset.xhtml?persistentId=doi:10.5683/SP2/DLGXYO
 
 
 #Bring spatial data into R environmnet
@@ -71,10 +71,12 @@ extracterize<-function(r, p, uid, fun=function(x){mean(x, na.rm=T)}){
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Create wrapper function for depth to bedrock estimate
 fun_bedrock<-function(n){
-  extracterize(r = bedrock_depth, 
-               p = sheds[n,],
-               uid = sheds$gage_num[n])
-}
+  tryCatch(extracterize(
+              r = bedrock_depth,
+              p = sheds[n,],
+              uid = sheds$GAGE_ID[n]), 
+           error = tibble(uid=sheds$GAGE_ID[n], 
+                          value = -9999))}
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #4.0 Porosity-------------------------------------------------------------------
@@ -104,7 +106,7 @@ porosity<-fasterize(porosity, r, field = 'Porosity')
 fun_porosity<-function(n){
   extracterize(r = porosity, 
                p = sheds_projected[n,],
-               uid = sheds_projected$gage_num[n])
+               uid = sheds_projected$GAGE_ID[n])
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -117,7 +119,7 @@ time_limit<-"12:00:00"
 n.nodes<-8
 n.cpus<-8
 sopts <- list(partition = cluster_name, time = time_limit)
-params<-data.frame(n=seq(1,16))
+params<-data.frame(n=seq(1,nrow(sheds)))
 
 #5.2 Send jobs to cluster-------------------------------------------------------
 #Record Start Time
@@ -140,17 +142,17 @@ bdk<- slurm_apply(fun_bedrock,
 por<- slurm_apply(fun_porosity, 
                   params,
                   add_objects = c(
-                  #Functions
-                  "fun_porosity", "extracterize",
-                  #Spatial data
-                  "sheds_projected","porosity"),
+                    #Functions
+                    "fun_porosity", "extracterize",
+                    #Spatial data
+                    "sheds_projected","porosity"),
                   nodes = n.nodes, cpus_per_node=n.cpus,
                   pkgs=c('sp','sf','raster','fasterize','dplyr'),
                   slurm_options = sopts)
 
 
 #check job status
-print_job_status(bkd)
+print_job_status(bdk)
 print_job_status(por)
 
 #5.3 Gather slurm results-------------------------------------------------------
@@ -166,12 +168,17 @@ tf-t0
 cleanup_files(bdk)
 cleanup_files(por)
 
-
-
-
-
-
-
-
-
-
+#Join results, cleanup, and estimate storage
+results<-bdk_results %>% as_tibble() %>% 
+  #Rename depth to bedrock and convert to m
+  rename(depth_bedrock_m = value) %>% 
+  mutate(depth_bedrock_m = depth_bedrock_m/100) %>% 
+  #Add porosity data
+  left_join(por_results) %>% rename(porosity = value) %>% 
+  #Calculate storage metric
+  mutate(storage_m = depth_bedrock_m*porosity) %>% 
+  #Use group_by to deal with duplicates
+  group_by(uid) %>% 
+  summarise(depth_bedrock_m=mean(depth_bedrock_m, na.rm=T),
+            porosity = mean(porosity, na.rm=T), 
+            storage_m = mean(storage_m, na.rm=T))
