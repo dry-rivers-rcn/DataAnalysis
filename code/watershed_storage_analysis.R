@@ -21,6 +21,7 @@ library(tidyverse)
 
 #Define data directories
 data_dir<-"/nfs/njones-data/Research Projects/DryRiversRCN/spatial_data/"
+results_dir<-"/nfs/njones-data/Research Projects/DryRiversRCN/results/"
 #This directory contains:
 # (1) Watershed Shapefiles Obtained from John Hammond (during the DryRiversRCN)
 # (2) Depth to bedrock: https://doi.org/10.1371/journal.pone.0169748
@@ -116,7 +117,7 @@ fun_porosity<-function(n){
 #Define global simulation options
 cluster_name<-"sesync"
 time_limit<-"12:00:00"
-n.nodes<-8
+n.nodes<-16
 n.cpus<-8
 sopts <- list(partition = cluster_name, time = time_limit)
 params<-data.frame(n=seq(1,nrow(sheds)))
@@ -182,3 +183,8 @@ results<-bdk_results %>% as_tibble() %>%
   summarise(depth_bedrock_m=mean(depth_bedrock_m, na.rm=T),
             porosity = mean(porosity, na.rm=T), 
             storage_m = mean(storage_m, na.rm=T))
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#6.0 Write results--------------------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+write_csv(results, paste0(results_dir, "watershed_storage.csv"))
