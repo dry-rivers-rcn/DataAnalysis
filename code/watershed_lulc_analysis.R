@@ -232,15 +232,118 @@ write.csv(results, paste0(results_dir,"LULC_historic.csv"))
 
 #Cleanup working space
 cleanup_files(job)
+remove(list = ls()[ls()!='sheds' &  ls()!='data_dir' & ls()!='results_dir'])
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #4.0 2006-2016 Data-------------------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #4.1 Create raster stack of LULC------------------------------------------------
 #Identify relevant files in subdirectory
-r<-list.files(paste0(data_dir,"USGS_LULC/"))[str_detect(list.files(paste0(data_dir,"USGS_LULC/")),"Historical_")]
-r<-paste0(paste0(data_dir,"USGS_LULC/"), r)
+r<-list.files(data_dir)[str_detect(list.files(data_dir),"NLCD")]
+r<-r[str_detect(r, '.img')]
+r<-r[!str_detect(r,'Change')]
+r<-r[!str_detect(r,'2001')]
+r<-r[!str_detect(r,'2004')]
+r<-r[!str_detect(r,'2006')]
+#r<-substr(r,1,nchar(r)-4)
+r<-paste0(data_dir, r)
 
-#Create raster stack
-r <- do.call(stack, lapply(r, raster))
+#identify raters of interest
+r2008<-raster(r[str_detect(r, '2008')])
+r2011<-raster(r[str_detect(r, '2011')])
+r2013<-raster(r[str_detect(r, '2013')])
+r2016<-raster(r[str_detect(r, '2016')])
+
+#4.2 Create function to extract LULC data---------------------------------------
+fun<-function(n, r, yr){
+  
+  #Define polygon 
+  p<-sheds[n,]
+  
+  #Define UID
+  uid<-sheds$GAGE_ID[n]
+  
+  #reproject polygon 
+  p<-sf::st_transform(p, crs=r@crs)
+  
+  #convert ws_poly to to a grid of points
+  p_grd<-fasterize::fasterize(p, crop(r[[1]], p))
+  p_pnt<-raster::rasterToPoints(p_grd) %>% 
+    dplyr::as_tibble() %>% 
+    sf::st_as_sf(., coords = c("x", "y"), crs = r@crs) %>% 
+    sf::as_Spatial(.)
+  
+  #Extract values at points
+  p_values <- raster::extract(r, p_pnt)
+  
+  #Apply function
+  results<- p_values %>% 
+    #Convert to tibble
+    dplyr::as_tibble() %>% 
+    #conver to long format
+    tidyr::pivot_longer(everything()) %>%
+    #tally by LULC value and year
+    dplyr::group_by(name, value) %>% dplyr::tally(.) %>% 
+    #Convert to area
+    dplyr::mutate(n = n*res(p_grd)[1]*res(p_grd)[2]) %>% 
+    #Convert back to wide format
+    tidyr::pivot_wider(., names_from = value, values_from = n) %>% 
+    #Convert name to year
+    dplyr::ungroup(.) %>% dplyr::rename(year = name) %>% 
+    dplyr::mutate(year = yr) %>% 
+    #Add uid Info
+    dplyr::mutate(uid = uid)
+  
+  #Export results
+  results
+}
+
+#4.3 Create wrapper function
+wrapper_fun<-function(n){
+  df2008<-fun(n, r2008, '2008')
+  df2011<-fun(n, r2011, '2011')
+  df2013<-fun(n, r2013, '2013')
+  df2016<-fun(n, r2016, '2016')
+  output<-list(df2008, df2011, df2013, df2016) %>% 
+    data.table::rbindlist(., fill=T)
+  output
+}
+
+#4.3 Send function to cluster---------------------------------------------------
+#Define global simulation options
+cluster_name<-"sesync"
+time_limit<-"12:00:00"
+n.nodes<-20
+n.cpus<-8
+sopts <- list(partition = cluster_name, time = time_limit)
+params<-data.frame(n=seq(1,nrow(sheds)))
+
+#send job to cluster
+job <- slurm_apply(wrapper_fun, 
+                   params,
+                   add_objects = c("fun","sheds","r2008", "r2011", "r2013", "r2016"),
+                   nodes = n.nodes, cpus_per_node=n.cpus,
+                   pkgs=c('sp','sf','raster','fasterize','dplyr', 'tidyr', 'stringr','data.table'),
+                   slurm_options = sopts)
+
+#check job status
+t0<-Sys.time()
+print_job_status(job)
+
+#Gather job results
+results <- get_slurm_out(job, outtype = "raw")
+results <- data.table::rbindlist(results, fill=T) %>% as_tibble()
+
+#Document time
+tf<-Sys.time()
+tf-t0
+
+#Save backup
+save.image("historical_results.RDATA")
+write.csv(results, paste0(results_dir,"LULC_historic.csv"))
+
+#Cleanup working space
+cleanup_files(job)
+remove(list = ls()[ls()!='sheds' &  ls()!='data_dir' & ls()!='results_dir'])
+
 
