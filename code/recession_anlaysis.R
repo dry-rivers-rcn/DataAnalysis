@@ -143,3 +143,6 @@ output<-output %>%
   mutate(k = 10^log_k) %>% 
   rename(STAID = site_no) %>% 
   left_join(., gage_info)
+
+#export output
+write.csv(output, "C:\\DryRiversRCN_Analysis/results/recession.csv")
