@@ -36,7 +36,7 @@ results_dir<-"/nfs/njones-data/Research Projects/DryRiversRCN/results/"
 
 #Download watershed data
 sheds<-sf::st_read(paste0(data_dir, "all_conus.shp"))
-states<-sf::st_read(paste0(data_dir, "tl_2017_us_state.shp"))
+states<-sf::st_read(paste0(data_dir, "tl017_us_state.shp"))
 
 #Crop sheds to continental US
 #prep states shape
@@ -60,7 +60,7 @@ r<-paste0(paste0(data_dir,"USGS_LULC/"), r)
 r <- do.call(stack, lapply(r, raster))
 
 #2.2 Create function to extract LULC data---------------------------------------
-fun_backcast<-function(n){
+fun<-function(n){
   
   #Define polygon 
   p<-sheds[n,]
@@ -98,15 +98,6 @@ fun_backcast<-function(n){
     dplyr::mutate(year = stringr::str_extract(year, "\\d+")) %>% 
     #Add uid Info
     dplyr::mutate(uid = uid)
-  
-  #Look for missing colnames
-  missing<-c('year', paste0(seq(1,16)), 'uid')
-  missing<-missing[!(missing %in% colnames(results))]
-  
-  #Add missing cols to tibble
-  for(i in 1:length(missing)){
-    results[,missing[i]]<-0
-  }
   
   #Export results
   results
@@ -123,33 +114,31 @@ params<-data.frame(n=seq(1,nrow(sheds)))
 
 #send job to cluster
 t0<-Sys.time()
-job1<- slurm_apply(fun_backcast, 
+job<- slurm_apply(fun, 
                    params,
-                   add_objects = c(
-                    #Functions
-                    "fun_backcast", 
-                    #Spatial data
-                    "sheds","r"),
+                   add_objects = c("sheds","r"),
                   nodes = n.nodes, cpus_per_node=n.cpus,
                   pkgs=c('sp','sf','raster','fasterize','dplyr', 'tidyr', 'stringr'),
                   slurm_options = sopts)
 
 #check job status
-print_job_status(job1)
+print_job_status(job)
 
 #Gather job results
-results_1 <- get_slurm_out(job1, outtype = "raw")
-results_1 <- bind_rows(results_1)
+results <- get_slurm_out(job1, outtype = "raw")
+results <- data.table::rbindlist(results, fill=T) %>% as_tibble()
 
 #Document time
 tf<-Sys.time()
 tf-t0
 
-#Cleanup jobs
-cleanup_files(job1)
-
 #Save backup
 save.image("hindcast_results.RDATA")
+write.csv(results, paste0(results_dir,"LULC_hindcast.csv"))
+
+#Cleanup working space
+cleanup_files(job)
+remove(list = ls()[ls()!='sheds' &  ls()!='data_dir' & ls()!='results_dir'])
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #3.0 1992-2006 Data-------------------------------------------------------------
@@ -162,8 +151,8 @@ r<-paste0(paste0(data_dir,"USGS_LULC/"), r)
 #Create raster stack
 r <- do.call(stack, lapply(r, raster))
 
-#2.3 Create function to extract LULC data---------------------------------------
-fun_historical<-function(n){
+#3.2 Create function to extract LULC data---------------------------------------
+fun<-function(n){
   
   #Define polygon 
   p<-sheds[n,]
@@ -202,54 +191,42 @@ fun_historical<-function(n){
     #Add uid Info
     dplyr::mutate(uid = uid)
   
-  #Look for missing colnames
-  missing<-c('year', paste0(seq(1,16)), 'uid')
-  missing<-missing[!(missing %in% colnames(results))]
-  
-  #Add missing cols to tibble
-  for(i in 1:length(missing)){
-    results[,missing[i]]<-0
-  }
-  
   #Export results
   results
 }
 
-#2.3 Send function to cluster---------------------------------------------------
+#3.3 Send function to cluster---------------------------------------------------
 #Define global simulation options
 cluster_name<-"sesync"
 time_limit<-"12:00:00"
-n.nodes<-24
+n.nodes<-20
 n.cpus<-8
 sopts <- list(partition = cluster_name, time = time_limit)
 params<-data.frame(n=seq(1,nrow(sheds)))
 
 #send job to cluster
 t0<-Sys.time()
-job2<- slurm_apply(fun_backcast, 
+job <- slurm_apply(fun, 
                    params,
-                   add_objects = c(
-                     #Functions
-                     "fun_backcast", 
-                     #Spatial data
-                     "sheds","r"),
+                   add_objects = c("sheds","r"),
                    nodes = n.nodes, cpus_per_node=n.cpus,
                    pkgs=c('sp','sf','raster','fasterize','dplyr', 'tidyr', 'stringr'),
                    slurm_options = sopts)
 
 #check job status
-print_job_status(job2)
+print_job_status(job)
 
 #Gather job results
-output <- get_slurm_out(job1, outtype = "raw")
-results_2 <- bind_rows(output)
+results <- get_slurm_out(job, outtype = "raw")
+results <- data.table::rbindlist(results, fill=T) %>% as_tibble()
 
 #Document time
 tf<-Sys.time()
 tf-t0
 
-#Cleanup jobs
-cleanup_files(job2)
-
 #Save backup
-save.image("historic_results.RDATA")
+save.image("historical_results.RDATA")
+write.csv(results, paste0(results_dir,"LULC_historic.csv"))
+
+#Cleanup working space
+cleanup_files(job)
