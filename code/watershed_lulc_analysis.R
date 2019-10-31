@@ -27,16 +27,18 @@ results_dir<-"/nfs/njones-data/Research Projects/DryRiversRCN/results/"
 
 #This directory contains:
 # (1) Watershed Shapefiles Obtained from John Hammond (during the DryRiversRCN)
-# (2) Hindcasted LULC 1938-1992: https://doi.org/10.5066/F7KK99RR
+# (2) Hindcasted LULC 1938-1992: doi: 10.1080/1747423X.2016.1147619
 #        web address: https://www.sciencebase.gov/catalog/item/59d3c73de4b05fe04cc3d1d1
-# (3) Historic LULC:1992 to 2006: https://doi.org/10.5066/P95AK9HP
+# (3) Historic LULC:1992 to 2006:  https://doi.org/10.1890/13-1245.1
 #        web address: https://www.sciencebase.gov/catalog/item/5b96c2f9e4b0702d0e826f6d
-# (4) State boundaries (Tiger)
+# (4) NLCD LULC: 2008 - 2016: 
+#        web address: https://www.mrlc.gov/data
+# (5) State boundaries (Tiger)
 #        web address: https://catalog.data.gov/dataset/tiger-line-shapefile-2017-nation-u-s-current-state-and-equivalent-national
 
 #Download watershed data
 sheds<-sf::st_read(paste0(data_dir, "all_conus.shp"))
-states<-sf::st_read(paste0(data_dir, "tl017_us_state.shp"))
+states<-sf::st_read(paste0(data_dir, "tl_2017_us_state.shp"))
 
 #Crop sheds to continental US
 #prep states shape
@@ -107,7 +109,7 @@ fun<-function(n){
 #Define global simulation options
 cluster_name<-"sesync"
 time_limit<-"12:00:00"
-n.nodes<-12
+n.nodes<-20
 n.cpus<-8
 sopts <- list(partition = cluster_name, time = time_limit)
 params<-data.frame(n=seq(1,nrow(sheds)))
@@ -125,7 +127,7 @@ job<- slurm_apply(fun,
 print_job_status(job)
 
 #Gather job results
-results <- get_slurm_out(job1, outtype = "raw")
+results <- get_slurm_out(job, outtype = "raw")
 results <- data.table::rbindlist(results, fill=T) %>% as_tibble()
 
 #Document time
@@ -230,3 +232,15 @@ write.csv(results, paste0(results_dir,"LULC_historic.csv"))
 
 #Cleanup working space
 cleanup_files(job)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#4.0 2006-2016 Data-------------------------------------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#4.1 Create raster stack of LULC------------------------------------------------
+#Identify relevant files in subdirectory
+r<-list.files(paste0(data_dir,"USGS_LULC/"))[str_detect(list.files(paste0(data_dir,"USGS_LULC/")),"Historical_")]
+r<-paste0(paste0(data_dir,"USGS_LULC/"), r)
+
+#Create raster stack
+r <- do.call(stack, lapply(r, raster))
+
