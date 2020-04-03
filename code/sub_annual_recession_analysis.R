@@ -24,80 +24,148 @@ library(EcoHydRology)
 library(foreign)
 library(tidyverse)
 
+#Define data dir
+data_dir<-"C:\\DryRiversRCN_Analysis/IRES metrics-zero-no-zero- NSF RCN/daily_data_with_climate_and_PET/"
+
+#Define list of USGS Gages from John's data files
+gage_list<-list.files(data_dir) %>% 
+  substr(., 1, nchar(.)-4)
+
+#Test gages
+#gage_list<-c("01110000","02294491", '06404998', "08086212","11159200", "13152500")
+
+#Download gage data
+gage_info<-read.dbf("C:\\DryRiversRCN_Analysis/gagesII/gagesII_9322_sept30_2011.dbf")
+
+#Organize gage info
+gage_info<-gage_info %>% select(STAID, DRAIN_SQKM, HUC02, AGGECOREGI)
+
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#2.0 Create function to isolate inividual storms--------------------------------
+#2.0 Organize flow data into long format----------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-
-
-#fun<-function(data, gage, rise_threshold)
-
-#for testing
-data<- flow
-gage<- '01110000'
-storm_threshold<-0.5
-bf_threshold<-0.05
-
-#Identify individual storms
-
-#Isolate data by gage number and order by date
-df<-data %>%
-  #isolate data (by site)
-  filter(site_no == gage) %>% 
-  #order by date
-  arrange(date)
-
-#Define flow thresholds based on input
-storm_threshold<-quantile(df$q_cfs, storm_threshold)
-bf_threshold<-quantile(df$q_cfs, bf_threshold)
-
-#Identify local min and max
-df<-df %>% 
-  #Find local min and max
-  mutate(local_max = if_else(lag(q_cfs) < q_cfs & lead(q_cfs) < q_cfs, 1, 0), 
-         local_min = if_else(lag(q_cfs) > q_cfs & lead(q_cfs) > q_cfs, 1, 0)) %>% 
-  #Delete local max below threshold
-  mutate(local_max = if_else(q_cfs>storm_threshold, local_max, 0)) %>% 
-  #Create unique ID's for local max
-  mutate(peak_id = cumsum(local_max))
-
-#Create inner function clip time series into individual hydrographs 
-#Note, for now we're just clipping the recession. Later on, we 
-#can add the rising limb if needed!
-inner_fun<-function(storm_id){
-  #filter df
-  ts<-df %>% 
-    #filter to storm of choice
-    filter(peak_id==storm_id) %>% 
-    #rename peak_id
-    rename(storm_id = peak_id) %>% 
-    #filter to data above flow threshold
-    filter(q_cfs>bf_threshold) %>% 
-    #select collumns of interest
-    select(date, q_cfs, storm_id)
+#Create download function
+download_fun<-function(n){
   
-  #export ts
+  #Identify gage 
+  gage<-gage_list[n]
+  
+  #download data
+  ts<-read_csv(paste0(data_dir, gage, ".csv")) %>% 
+    mutate(site_no = gage) %>%
+    rename(Q_cfs = X_00060_00003) %>% 
+    select(site_no, Date, Q_cfs) 
+  
+  #Check for errors
+  if(is.double(ts$Q_cfs)==FALSE){
+    ts<-tibble(
+      site_no = gage, 
+      Date = as.Date("1900-1-01"), 
+      Q_cfs = -9999
+    )
+  }
+  
+  #Export data
   ts
 }
 
-#Create list with individual storm data in each list element
-storms<-lapply(seq(1, max(df$peak_id)), clip_fun)
+#Apply function and bind rows
+flow<-lapply(seq(1, length(gage_list)), download_fun) 
+flow<-flow %>% bind_rows()
 
-#Create function to analyse each storm
-#Note, this could be combined with the "inner_fun" above for speed, 
-#but I broke it into two parts for now for ease.
-analysis_fun<-function(n){
-  #Isolate time series
-  ts<-storms[[n]]
+#Filter -9999 values out
+flow<-flow %>% filter(Q_cfs>-9999)
+
+gage_list <- unique(flow$site_no)
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#3.0 Create function to isolate inividual storms--------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Create function based on site_no
+fun<-function(n){
+
+#Identify gage
+gage_id<-gage_list[n]
+
+#reduce flow to gage of interest
+df<-flow %>% filter(site_no == gage_id) %>% as_tibble()
+
+#Clean data
+df<-df %>% 
+  #Remove NA
+  drop_na(Q_cfs) %>% 
+  #order by date
+  arrange(Date)
+
+#Isolate individual recession events
+df<-df %>% 
+  #Estiamte change in flow (dq/dt)
+  mutate(dQ = Q_cfs-lag(Q_cfs)) %>% 
+  #Remove rising limb
+  filter(dQ<0) %>% 
+  #Estimate change in time
+  mutate(dt = as.numeric(paste(Date - lag(Date)))) %>% 
+  drop_na(dt) %>% 
+  #Define individual events
+  mutate(event = if_else(dt ==1, 0, 1),
+         event_id = cumsum(event) + 1) %>% 
+  #Remove event and dt collumns
+  select(-c(dt, event))
   
-  #Analyze Time series
-  ts<-ts %>% 
-    mutate(t_day = date - min(date), 
-           t_day = as.numeric(paste(t_day))+1)
+#Create inner function to estimate recession metrics 
+inner_fun<-function(m){
+  #Subset to individual event
+  r<-df %>% filter(event_id==m) 
   
-  #Create linear model
-  model<-lm(log(q_cfs)~log(t_day), data=ts)
+  #Change sign on dQ/dt (note, dQ==dQ/dt here because dt is one day!)
+  r<-r %>% mutate(dQ=-1*dQ)
   
+  #Remove events < 4 days
+  if(nrow(r)>=5){
+  
+    #remove first day
+    r<-r[-1,]
+    
+    #Create linear model in log-log space
+    model<-lm(log(dQ)~log(Q_cfs+0.001), data=r)
+    
+    #Create output
+    inner_output<-tibble(
+      event_id = r$event_id[1],
+      dur = nrow(r)+1,
+      date_mean = mean(as.POSIXlt(r$Date, "%Y/%m/%d")$yday),
+      Q_mean = mean(r$Q_cfs),
+      log_a = model$coefficients[1],
+      b = model$coefficients[2],
+      rsq = summary(model)$r.squared)
+  }else{
+    inner_output<-tibble(
+      event_id = r$event_id[1],
+      dur = nrow(r),
+      Q_mean = mean(r$Q_cfs),
+      log_a = NA,
+      b = NA,
+      rsq = NA)
+  }
+  
+  #Return output
+  inner_output
 }
+
+#Execute inner function
+output<-lapply(seq(1,max(df$event_id, na.rm=T)), inner_fun) %>% 
+  bind_rows() %>% 
+  drop_na() %>% 
+  mutate(site_no = df$site_no[1])
+
+#Export 
+output
+}
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#4.0 Create function to isolate inividual storms--------------------------------
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+
 
