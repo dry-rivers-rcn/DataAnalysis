@@ -20,7 +20,6 @@ rm(list=ls())
 
 #download relevant packages
 library(dataRetrieval)
-library(EcoHydRology)
 library(foreign)
 library(tidyverse)
 
@@ -162,10 +161,39 @@ output
 }
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#4.0 Create function to isolate inividual storms--------------------------------
+#4.0 Run f(x) in parralel-----------------------------------------------------
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Create dummy function to catch erros 
+execute<-function(a){
+  tryCatch(fun(a), error=function(e) NULL)
+}
 
+#Start recording time 
+t0<-Sys.time()
 
+#Determine the number of cores on the machine
+n.cores<-detectCores()
 
+#Create Clusters
+cl <- makePSOCKcluster(n.cores) 
+
+#Export libraries to clusers
+clusterEvalQ(cl, library(tidyverse))  
+
+#Export function to cluser
+clusterExport(cl, c('fun', 'gage_list', 'flow'), env=.GlobalEnv)  
+
+#Execute function on cluster
+x<-parLapply(cl, seq(1,length(gage_list)), execute) 
+
+#Stop clusters
+stopCluster(cl)  #Turn clusters off
+
+#Record time
+tf<-Sys.time()
+tf-t0
+
+#Gather data
+recession<-x %>% bind_rows()
 
 
