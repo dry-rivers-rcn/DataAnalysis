@@ -21,6 +21,7 @@ rm(list=ls())
 #download relevant packages
 library(dataRetrieval)
 library(foreign)
+library(parallel)
 library(tidyverse)
 
 #Define data dir
@@ -82,6 +83,7 @@ gage_list <- unique(flow$site_no)
 #Create function based on site_no
 fun<-function(n){
 
+#Organize data~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Identify gage
 gage_id<-gage_list[n]
 
@@ -95,6 +97,7 @@ df<-df %>%
   #order by date
   arrange(Date)
 
+#Estimate metrics for individual recession events~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #Isolate individual recession events
 df<-df %>% 
   #Estiamte change in flow (dq/dt)
@@ -133,6 +136,7 @@ inner_fun<-function(m){
       dur = nrow(r)+1,
       date_mean = mean(as.POSIXlt(r$Date, "%Y/%m/%d")$yday),
       Q_mean = mean(r$Q_cfs),
+      Q_min = min(r$Q_cfs),
       log_a = model$coefficients[1],
       b = model$coefficients[2],
       rsq = summary(model)$r.squared)
@@ -141,6 +145,7 @@ inner_fun<-function(m){
       event_id = r$event_id[1],
       dur = nrow(r),
       Q_mean = mean(r$Q_cfs),
+      Q_min = min(r$Q_cfs),
       log_a = NA,
       b = NA,
       rsq = NA)
@@ -155,6 +160,49 @@ output<-lapply(seq(1,max(df$event_id, na.rm=T)), inner_fun) %>%
   bind_rows() %>% 
   drop_na() %>% 
   mutate(site_no = df$site_no[1])
+
+#Standardize or decorrelate log_a~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#Define median b value (we will fix this value in the event scale recession models)
+b_m<-median(output$b)
+
+#Create fun to esimtate standardized log_a
+inner_fun_2<-function(m){
+  #Subset to individual event
+  r<-df %>% filter(event_id==m) 
+  
+  #Change sign on dQ/dt (note, dQ==dQ/dt here because dt is one day!)
+  r<-r %>% mutate(dQ=-1*dQ)
+  
+  #Remove events < 4 days
+  if(nrow(r)>=5){
+    
+    #remove first day
+    r<-r[-1,]
+    
+    #Create linear model in log-log space (hold intercept constant at b_m)
+    model<-lm(log(dQ)~0+log(Q_cfs+0.001), offset = rep(b_m, nrow(r)), data=r)
+    
+    #Create output
+    inner_output<-tibble(
+      event_id = r$event_id[1],
+      log_a_norm = model$coefficients[1])
+  }else{
+    inner_output<-tibble(
+      event_id = r$event_id[1],
+      log_a_norm = NA)
+  }
+  
+  #Return output
+  inner_output
+}
+
+#Run function
+log_a_norm<-lapply(seq(1,max(df$event_id, na.rm=T)), inner_fun_2) %>% 
+  bind_rows() %>% 
+  drop_na() 
+
+#Join log_a_norm to output
+output<-left_join(output, log_a_norm)
 
 #Export 
 output
@@ -184,10 +232,10 @@ clusterEvalQ(cl, library(tidyverse))
 clusterExport(cl, c('fun', 'gage_list', 'flow'), env=.GlobalEnv)  
 
 #Execute function on cluster
-x<-parLapply(cl, seq(1,length(gage_list)), execute) 
+x<-parLapply(cl, seq(1,length(gage_list)), execute) #
 
 #Stop clusters
-stopCluster(cl)  #Turn clusters off
+stopCluster(cl)  
 
 #Record time
 tf<-Sys.time()
@@ -196,4 +244,6 @@ tf-t0
 #Gather data
 recession<-x %>% bind_rows()
 
+#Save backup
+save.image('backup_recession.RData')
 
