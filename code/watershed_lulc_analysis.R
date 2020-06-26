@@ -245,17 +245,13 @@ r<-r[!str_detect(r,'Change')]
 r<-r[!str_detect(r,'2001')]
 r<-r[!str_detect(r,'2004')]
 r<-r[!str_detect(r,'2006')]
-#r<-substr(r,1,nchar(r)-4)
 r<-paste0(data_dir, r)
 
 #identify raters of interest
-r2008<-raster(r[str_detect(r, '2008')])
-r2011<-raster(r[str_detect(r, '2011')])
-r2013<-raster(r[str_detect(r, '2013')])
-r2016<-raster(r[str_detect(r, '2016')])
+r <- do.call(stack, lapply(r, raster))
 
 #4.2 Create function to extract LULC data---------------------------------------
-fun<-function(n, r, yr){
+fun<-function(n){
   
   #Define polygon 
   p<-sheds[n,]
@@ -273,8 +269,11 @@ fun<-function(n, r, yr){
     sf::st_as_sf(., coords = c("x", "y"), crs = r@crs) %>% 
     sf::as_Spatial(.)
   
+  #Crop raster for speed
+  r_crop<-crop(r, p)
+  
   #Extract values at points
-  p_values <- raster::extract(r, p_pnt)
+  p_values <- raster::extract(r_crop, p_pnt)
   
   #Apply function
   results<- p_values %>% 
@@ -290,7 +289,7 @@ fun<-function(n, r, yr){
     tidyr::pivot_wider(., names_from = value, values_from = n) %>% 
     #Convert name to year
     dplyr::ungroup(.) %>% dplyr::rename(year = name) %>% 
-    dplyr::mutate(year = yr) %>% 
+    dplyr::mutate(year = stringr::str_extract(year, "\\d+")) %>% 
     #Add uid Info
     dplyr::mutate(uid = uid)
   
@@ -298,16 +297,6 @@ fun<-function(n, r, yr){
   results
 }
 
-#4.3 Create wrapper function
-wrapper_fun<-function(n){
-  df2008<-fun(n, r2008, '2008')
-  df2011<-fun(n, r2011, '2011')
-  df2013<-fun(n, r2013, '2013')
-  df2016<-fun(n, r2016, '2016')
-  output<-list(df2008, df2011, df2013, df2016) %>% 
-    data.table::rbindlist(., fill=T)
-  output
-}
 
 #4.3 Send function to cluster---------------------------------------------------
 #Define global simulation options
@@ -319,11 +308,11 @@ sopts <- list(partition = cluster_name, time = time_limit)
 params<-data.frame(n=seq(1,nrow(sheds)))
 
 #send job to cluster
-job <- slurm_apply(wrapper_fun, 
+job <- slurm_apply(fun, 
                    params,
-                   add_objects = c("fun","sheds","r2008", "r2011", "r2013", "r2016"),
+                   add_objects = c("sheds","r"),
                    nodes = n.nodes, cpus_per_node=n.cpus,
-                   pkgs=c('sp','sf','raster','fasterize','dplyr', 'tidyr', 'stringr','data.table'),
+                   pkgs=c('sp','sf','raster','fasterize','dplyr', 'tidyr', 'stringr'),
                    slurm_options = sopts)
 
 #check job status
@@ -339,7 +328,7 @@ tf<-Sys.time()
 tf-t0
 
 #Save backup
-save.image("historical_results.RDATA")
+save.image("nlcd_results.RDATA")
 write.csv(results, paste0(results_dir,"LULC_historic.csv"))
 
 #Cleanup working space
