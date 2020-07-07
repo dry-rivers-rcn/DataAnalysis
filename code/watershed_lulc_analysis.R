@@ -293,7 +293,7 @@ fun<-function(n){
 #Define global simulation options
 cluster_name<-"sesync"
 time_limit<-"12:00:00"
-n.nodes<-16
+n.nodes<-20
 n.cpus<-8
 sopts <- list(partition = cluster_name, time = time_limit)
 params<-data.frame(n=seq(1,nrow(sheds)))
@@ -313,16 +313,6 @@ print_job_status(job)
 #Gather job results
 results <- get_slurm_out(job, outtype = "raw")
 
-#Remove errors
-results[[194]]<-NULL
-results[[200]]<-NULL
-results[[206]]<-NULL
-results[[212]]<-NULL
-results[[492]]<-NULL
-results[[498]]<-NULL
-results[[504]]<-NULL
-results[[510]]<-NULL
-
 #Bind results together
 results <- data.table::rbindlist(results, fill=T) %>% as_tibble()
 
@@ -330,37 +320,9 @@ results <- data.table::rbindlist(results, fill=T) %>% as_tibble()
 tf<-Sys.time()
 tf-t0
 
-#4.4 Look for errors------------------------------------------------------------
-#Define gages without results
-test<-results %>% 
-  select(uid) %>% 
-  mutate(uid = as.numeric(paste(uid))) %>% 
-  rename(gage_num=uid) %>% 
-  mutate(run = 1) %>% 
-  distinct() %>% 
-  left_join(ires, .) %>% 
-  filter(is.na(run))
-
-#Subset sheds
-backup<-sheds
-sheds<-right_join(sheds, test)
-
-#run function for shits and giggles
-results2<-parallel::mclapply(
-  X = seq(1, nrow(sheds)), 
-  FUN = fun, 
-  mc.cores = 15)
-
-#compile  results 
-results2<-data.table::rbindlist(results2, fill=T) %>% as_tibble()
-
-#Add to first set of results
-output<-bind_rows(results, results2)
-
-
 #Save backup
 save.image("nlcd_results.RDATA")
-write.csv(output, paste0(results_dir,"LULC_nlcd.csv"))
+write.csv(results, paste0(results_dir,"LULC_nlcd.csv"))
 # 
 # #Cleanup working space
 # cleanup_files(job)
