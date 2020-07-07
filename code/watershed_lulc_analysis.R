@@ -38,17 +38,13 @@ results_dir<-"/nfs/njones-data/Research Projects/DryRiversRCN/results/"
 
 #Download watershed data
 sheds<-sf::st_read(paste0(data_dir, "all_conus.shp"))
-states<-sf::st_read(paste0(data_dir, "tl_2017_us_state.shp"))
 
-#Crop sheds to continental US
-#prep states shape
-states<-states %>% 
-  #project object
-  sf::st_transform(., crs=st_crs(sheds)) %>% 
-  #Remove state outside CONUS
-  dplyr::filter(!(STUSPS %in% c("AK", "HI", "GU","PR", "AS", "VI", "MP"))) 
-#crop sheds shapefile
-sheds<-sheds[states,]
+#Load IRES Gage list
+ires<-readr::read_csv(paste0(data_dir,"IRES_gages.csv")) %>% 
+  rename(gage_num = gage_ID)
+
+#Crop sheds to IRES datasets
+sheds<-right_join(sheds, ires)
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #2.0 Pre-1992 Data--------------------------------------------------------------
@@ -262,29 +258,25 @@ fun<-function(n){
   #reproject polygon 
   p<-sf::st_transform(p, crs=r@crs)
   
-  #convert ws_poly to to a grid of points
-  p_grd<-fasterize::fasterize(p, crop(r[[1]], p))
-  p_pnt<-raster::rasterToPoints(p_grd) %>% 
-    dplyr::as_tibble() %>% 
-    sf::st_as_sf(., coords = c("x", "y"), crs = r@crs) %>% 
-    sf::as_Spatial(.)
-  
   #Crop raster for speed
   r_crop<-crop(r, p)
+  r_mask<-mask(r_crop, p)
   
-  #Extract values at points
-  p_values <- raster::extract(r_crop, p_pnt)
+  #Convert r_mask to xyz
+  r_pnt<-raster::rasterToPoints(r_mask)
   
-  #Apply function
-  results<- p_values %>% 
+  #Tidy data
+  results<-r_pnt %>% 
     #Convert to tibble
-    dplyr::as_tibble() %>% 
+    dplyr::as_tibble() %>%
+    #Remove XY data  
+    select(-c(x,y)) %>% 
     #conver to long format
     tidyr::pivot_longer(everything()) %>%
     #tally by LULC value and year
     dplyr::group_by(name, value) %>% dplyr::tally(.) %>% 
     #Convert to area
-    dplyr::mutate(n = n*res(p_grd)[1]*res(p_grd)[2]) %>% 
+    dplyr::mutate(n = n*res(r_mask)[1]*res(r_mask)[2]) %>% 
     #Convert back to wide format
     tidyr::pivot_wider(., names_from = value, values_from = n) %>% 
     #Convert name to year
@@ -297,18 +289,17 @@ fun<-function(n){
   results
 }
 
-
 #4.3 Send function to cluster---------------------------------------------------
 #Define global simulation options
 cluster_name<-"sesync"
 time_limit<-"12:00:00"
-n.nodes<-20
+n.nodes<-16
 n.cpus<-8
 sopts <- list(partition = cluster_name, time = time_limit)
 params<-data.frame(n=seq(1,nrow(sheds)))
 
 #send job to cluster
-job <- slurm_apply(fun, 
+job <- slurm_apply(fun,
                    params,
                    add_objects = c("sheds","r"),
                    nodes = n.nodes, cpus_per_node=n.cpus,
@@ -321,18 +312,57 @@ print_job_status(job)
 
 #Gather job results
 results <- get_slurm_out(job, outtype = "raw")
+
+#Remove errors
+results[[194]]<-NULL
+results[[200]]<-NULL
+results[[206]]<-NULL
+results[[212]]<-NULL
+results[[492]]<-NULL
+results[[498]]<-NULL
+results[[504]]<-NULL
+results[[510]]<-NULL
+
+#Bind results together
 results <- data.table::rbindlist(results, fill=T) %>% as_tibble()
 
 #Document time
 tf<-Sys.time()
 tf-t0
 
+#4.4 Look for errors------------------------------------------------------------
+#Define gages without results
+test<-results %>% 
+  select(uid) %>% 
+  mutate(uid = as.numeric(paste(uid))) %>% 
+  rename(gage_num=uid) %>% 
+  mutate(run = 1) %>% 
+  distinct() %>% 
+  left_join(ires, .) %>% 
+  filter(is.na(run))
+
+#Subset sheds
+backup<-sheds
+sheds<-right_join(sheds, test)
+
+#run function for shits and giggles
+results2<-parallel::mclapply(
+  X = seq(1, nrow(sheds)), 
+  FUN = fun, 
+  mc.cores = 15)
+
+#compile  results 
+results2<-data.table::rbindlist(results2, fill=T) %>% as_tibble()
+
+#Add to first set of results
+output<-bind_rows(results, results2)
+
+
 #Save backup
 save.image("nlcd_results.RDATA")
-write.csv(results, paste0(results_dir,"LULC_historic.csv"))
-
-#Cleanup working space
-cleanup_files(job)
-remove(list = ls()[ls()!='sheds' &  ls()!='data_dir' & ls()!='results_dir'])
-
+write.csv(output, paste0(results_dir,"LULC_nlcd.csv"))
+# 
+# #Cleanup working space
+# cleanup_files(job)
+# remove(list = ls()[ls()!='sheds' &  ls()!='data_dir' & ls()!='results_dir'])
 
